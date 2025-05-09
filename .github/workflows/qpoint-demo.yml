@@ -1,0 +1,66 @@
+name: Qpoint Demo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-qpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Install Qpoint Demo
+        env:
+          QPOINT_DEPLOYMENT_TAGS: "runner:gha,runner_instance:${{ github.run_id }}"
+        run: |
+          docker run -d \
+          --user 0:0 \
+          --privileged \
+          --cap-add CAP_BPF \
+          --cap-add CAP_SYS_ADMIN \
+          --pid=host \
+          --network=host \
+          -v /sys:/sys \
+          -e TINI_SUBREAPER=1 \
+          --ulimit=memlock=-1 \
+          us-docker.pkg.dev/qpoint-edge/public/qtap:v0 \
+          --log-level=info \
+          --registration-token=${{ secrets.TOKEN }}
+          # Store the container ID
+          echo "QPOINT_CONTAINER_ID=$!" >> $GITHUB_ENV
+
+      - name: Wait for Qpoint to be ready
+        run: |
+          echo "Waiting for Qpoint to be ready..."
+          max_attempts=30
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:10001/readyz | grep -q "200"; then
+              echo "Qpoint is ready!"
+              break
+            fi
+            
+            attempt=$((attempt + 1))
+            echo "Attempt $attempt/$max_attempts - Qpoint not ready yet, waiting..."
+            sleep 10
+          done
+          
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Timed out waiting for Qpoint to be ready"
+            exit 1
+          fi
+
+      - name: Run Traffic Generator
+        run: |
+          docker run -d \
+          --network=host \
+          jonfriesen/traffic-generator-go:amd64_1.22 \
+          traffic-gen --rps=1 --workers=3
+
+      - name: Letting the demo run for 30 seconds
+        run: |
+          echo "Waiting 30 seconds for the demo to run..."
+          sleep 30
+          echo "All done!"
